@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 		user_error();
 	if(strchr("qxdAtv", key[1]) == NULL) // If key is NOT contained in "qxdAtv"
 		user_error();
-	if(strchr("Atv", key[1]) != NULL) { // If is key IS contained in "Atv"
+	if(strchr("Atv", key[1]) != NULL) { // If is key is contained in "Atv"
 		if(argc != 3)
 			user_error();
 		if(key[1] != 'A') { // If key is NOT 'A' -> implies 't' or 'v'
