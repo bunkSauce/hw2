@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <ar.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define NAME_LIMIT 16
 #define DATE_LIMIT 11
@@ -11,6 +12,7 @@
 #define GID_LIMIT 5
 #define MODE_LIMIT 7
 #define SIZE_LIMIT 9
+#define ARFMAG_LIMIT 1
 
 void error(char *message)
 {
@@ -47,7 +49,7 @@ char ** get_files(int file_count, char **argv)
 	return files;
 }
 
-int is_archive(char *afile) // fix entire
+int is_archive(char *afile)
 {
 	int success = 1;
 	if(!is_file(&afile, 1)) {
@@ -60,7 +62,7 @@ int is_archive(char *afile) // fix entire
 			read(file_desc, buffer, SARMAG);
 			buffer[SARMAG] = '\0'; // Appending a string termination
 			if(strcmp(buffer, ARMAG) != 0) { // Archive identifier mismatch
-				printf("Exception: Archive format invalid");
+				printf("Exception: Archive format invalid\n");
 				archive_error();
 			}
 		} else {
@@ -74,11 +76,17 @@ int is_archive(char *afile) // fix entire
 int is_file(char **files, int file_count)
 {
 	int success = 1;
+	struct stat buffer;
 	int i;
 	for(i = 0; i < file_count; i++) {
 		if(access(files[i], F_OK) == -1) {
 			success = 0;
 			printf("Exception: %s not found\n", files[i]);
+		}
+		stat(files[i], &buffer);
+		if(!S_ISREG(buffer.st_mode)) {
+			success = 0;
+			printf("Exception: %s is not a regular file\n", files[i]);
 		}
 	}
 	return success;
@@ -88,7 +96,7 @@ char ** fetch_files_cd(int *file_count) // fix entire
 {
 	char **files = (char **) malloc(sizeof(char *) * 1);
 	printf("Fetching files in cd...\n");
-	files[0] = "All regular files in current directory appended";
+	files[0] = "All regular files in current directory appended\n";
 	*file_count = 1;
 	return files;
 }
@@ -102,13 +110,55 @@ void clean_string(char *string)
 		string[i] = '\0';
 }
 
+char * get_permissions(struct ar_hdr *header)
+{
+	mode_t file_mode = strtoul(header->ar_mode, NULL, 8);
+	int max_chars = sizeof("rwxrwxrwx");
+	char *permissions = (char *) malloc(sizeof(char) * max_chars);
+	snprintf(permissions, max_chars, "%c%c%c%c%c%c%c%c%c",
+		 (file_mode & S_IRUSR) ? 'r' : '-', // User permissions
+		 (file_mode & S_IWUSR) ? 'w' : '-',
+		 (file_mode & S_IXUSR) ? 'x' : '-',
+		 (file_mode & S_IRGRP) ? 'r' : '-', // Group permissions
+		 (file_mode & S_IWGRP) ? 'w' : '-',
+		 (file_mode & S_IXGRP) ? 'x' : '-',
+		 (file_mode & S_IROTH) ? 'r' : '-', // Others permissions
+		 (file_mode & S_IWOTH) ? 'w' : '-',
+		 (file_mode & S_IXOTH) ? 'x' : '-');
+	return permissions;
+}
+
 void print_header(struct ar_hdr *header, char key)
 {
 	if(strcmp(header->ar_name, "")) {
 		if(key == 't')
 			printf("%s\n", header->ar_name);
-		if(key == 'v')
-			printf("\n\nDID NOT IMPLEMENT\n\n\n");
+		if(key == 'v') {
+			char *permissions = get_permissions(header);
+			char buffer[1000];
+			time_t sec = (time_t) strtol(header->ar_date, NULL, 0);
+			struct tm *time = localtime(&sec);
+			strftime(buffer, 1000, "%b %d %H:%M %Y", time);
+			clean_string(buffer);
+			printf("%s %s/%s\t   ",
+			       permissions, header->ar_uid, header->ar_gid);
+			int size = atoi(header->ar_size);
+			int i;
+			int j = 1;
+			for(i = 10; i <= size; i *= 10) {
+				printf("\b");
+				j++;
+				if(j > 6) {
+					printf(" ");
+				}
+			}
+			printf("%s", header->ar_size);
+			for(i = 8 - j; i > 0; i--)
+				printf("\b");
+			if(buffer[4] == '0')
+				buffer[4] = ' ';
+			printf("%s %s\n", buffer, header->ar_name);
+		}
 	}
 }
 
@@ -163,41 +213,157 @@ void print_table(int ar_desc, char key)
 	}
 }
 
-void concise_table(char *afile) // fix entire
+int open_ar(char *afile)
 {
 	int ar_desc = open(afile, O_RDONLY);
 	if(ar_desc == -1) {
-		printf("Exception: Cannot read %s\n", afile);
+		printf("Exception: Cannot read archive: %s\n", afile);
 		archive_error();
 	}
+	return ar_desc;
+}
+
+int open_file(char *file)
+{
+	int file_desc = open(file, O_RDONLY);
+	if(file_desc == -1) {
+		printf("Exception: Cannot read file: %s\n", file);
+		file_error();
+	}
+	return file_desc;
+}
+
+void close_ar(int ar_desc)
+{
+	if(close(ar_desc == -1)) {
+		printf("Exception: Cannot close archive");
+		archive_error();
+	}
+}
+
+void close_file(int file_desc)
+{
+	if(close(file_desc == -1)) {
+		printf("Exception: Cannot close file");
+		file_error();
+	}
+}
+
+void concise_table(char *afile)
+{
+	int ar_desc = open_ar(afile);
 	print_table(ar_desc, 't');
-	close(ar_desc);
+	close_ar(ar_desc);
 	exit(0);
 }
 
-void verbose_table(char *afile) // fix entire
+void verbose_table(char *afile)
 {
-	printf("Printing verbose table...\n");
+	int ar_desc = open_ar(afile);
+	print_table(ar_desc, 'v');
+	close_ar(ar_desc);
 	exit(0);
 }
 
-int create_archive(char *afile) // fix entire
+void init_ar(int ar_desc)
 {
-	int created = 1;
+	if(lseek(ar_desc, 0, SEEK_SET) == lseek(ar_desc, 0, SEEK_END)) {
+		write(ar_desc, ARMAG, SARMAG);
+	} else {
+		printf("Unable to initialize archive - improper format\n");
+		archive_error();
+	}
+}
+
+int create_ar(char *afile, int flags, int permissions)
+{
+	int ar_desc = open(afile, flags, permissions);
+	if(ar_desc == -1) {
+		printf("Exception: Cannot create archive: %s\n", afile);
+		archive_error();
+	}
 	printf("Creating archive: %s\n", afile);
-	return created;
+	return ar_desc;
 }
 
-void append(char *afile, char **files, int file_count) // fix entire
+struct ar_hdr * init_header(int file_desc, char *file) // NOT WORKING
 {
-	if(!is_archive(afile))
-		if(!create_archive(afile)) {
-		   printf("Exception: Archive not created");
+	struct stat buffer;
+	fstat(file_desc, &buffer);
+	struct ar_hdr *header = (struct ar_hdr *) malloc(sizeof(struct ar_hdr));
+	char header_name[16];
+	strcpy(header_name, file);
+	strcat(header_name, "/");
+	snprintf(header->ar_name, 60, "%-16s%-121d%-61d%-61d%-81o%-1011d",
+		 header_name, buffer.st_mtime, (long) buffer.st_uid,
+		 (long) buffer.st_gid, (unsigned long) buffer.st_mode,
+		 (long long) buffer.st_size);
+	strcpy(header->ar_fmag, ARFMAG);
+	lseek(file_desc, 0, SEEK_SET);
+	return header;
+}
+
+void write_header(int ar_desc, struct ar_hdr *header) // NOT WORKING
+{
+	write(ar_desc, header->ar_name, NAME_LIMIT);
+	write(ar_desc, header->ar_date, DATE_LIMIT + 1);
+	write(ar_desc, header->ar_uid, UID_LIMIT + 1);
+	write(ar_desc, header->ar_gid, GID_LIMIT + 1);
+	write(ar_desc, header->ar_mode, MODE_LIMIT + 1);
+	write(ar_desc, header->ar_size, SIZE_LIMIT + 1);
+	write(ar_desc, header->ar_fmag, ARFMAG_LIMIT + 1);
+}
+
+off_t get_size(int file_desc) // NOT WORKING
+{
+	off_t size;
+	int pos = lseek(file_desc, 0L, SEEK_CUR);
+	size = lseek(file_desc, 0, SEEK_END);
+	lseek(file_desc, pos, SEEK_SET);
+	return size;
+}
+
+void append_content(int ar_desc, int file_desc, int size) // NOT WORKING LIKELY CAUSE
+{
+	char buffer[1];
+	off_t appended = 0;
+	int char_written = 0;
+	while(appended < size) {
+		read(file_desc, buffer, 1);
+		char_written = write(ar_desc, buffer, 1);
+		appended += char_written;
+		lseek(file_desc, 0, SEEK_CUR);
+	}
+}
+
+void append_file(int ar_desc, char *file) // NOT WORKING
+{
+	int file_desc = open_file(file);
+	struct ar_hdr *header = init_header(file_desc, file);
+	write_header(ar_desc, header);
+	append_content(ar_desc, file_desc, get_size(file_desc));
+	close_file(file_desc);
+}
+
+void append(char *afile, char **files, int file_count) // NOT WORKING
+{
+	int ar_desc;
+	if(!is_archive(afile)) {
+		if(is_file(&afile, 1)) {
+		   printf("Exception: Archive invalid - cannot append\n");
 		   archive_error();
+		} else {
+			int flags = O_CREAT | O_WRONLY | O_APPEND;
+			ar_desc = create_ar(afile, flags, 0666);
+			init_ar(ar_desc);
 		}
-	int c;
-	for(c = 0; c < file_count; c++)
-		printf("%s appended to %s\n%d files appended\n", files[c], afile, c + 1);
+	} else {
+		ar_desc = open_ar(afile);
+	}
+	int i;
+	for(i = 0; i < file_count; i++)
+		append_file(ar_desc, files[i]);
+	close_ar(ar_desc);
 	exit(0);
 }
 
