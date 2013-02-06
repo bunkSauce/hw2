@@ -5,6 +5,13 @@
 #include <ar.h>
 #include <fcntl.h>
 
+#define NAME_LIMIT 16
+#define DATE_LIMIT 11
+#define UID_LIMIT 5
+#define GID_LIMIT 5
+#define MODE_LIMIT 7
+#define SIZE_LIMIT 9
+
 void error(char *message)
 {
 	printf("\nExiting process: %s\n\n", message);
@@ -29,6 +36,15 @@ void file_error()
 void program_error()
 {
 	error("Program error encountered");
+}
+
+char ** get_files(int file_count, char **argv)
+{
+	char **files = (char **) malloc(sizeof(char *) * file_count);
+	int i;
+	for(i = 0; i < file_count; i++)
+		files[i] = argv[i + 3];
+	return files;
 }
 
 int is_archive(char *afile) // fix entire
@@ -68,18 +84,6 @@ int is_file(char **files, int file_count)
 	return success;
 }
 
-void concise_table(char *afile) // fix entire
-{
-	printf("Printing concise table...\n");
-	exit(0);
-}
-
-void verbose_table(char *afile) // fix entire
-{
-	printf("Printing verbose table...\n");
-	exit(0);
-}
-
 char ** fetch_files_cd(int *file_count) // fix entire
 {
 	char **files = (char **) malloc(sizeof(char *) * 1);
@@ -87,6 +91,94 @@ char ** fetch_files_cd(int *file_count) // fix entire
 	files[0] = "All regular files in current directory appended";
 	*file_count = 1;
 	return files;
+}
+
+void clean_string(char *string)
+{
+	int i;
+	for(i = 0; string[i] == ' '; i++)
+		string++;
+	for(i = strlen(string) - 1; string[i] == ' '; i--)
+		string[i] = '\0';
+}
+
+void print_header(struct ar_hdr *header, char key)
+{
+	if(strcmp(header->ar_name, "")) {
+		if(key == 't')
+			printf("%s\n", header->ar_name);
+		if(key == 'v')
+			printf("\n\nDID NOT IMPLEMENT\n\n\n");
+	}
+}
+
+int is_header(int ar_desc, int pos)
+{
+	int orig_pos = lseek(ar_desc, 0L, SEEK_CUR);
+	int end_file = lseek(ar_desc, 0, SEEK_END);
+	lseek(ar_desc, orig_pos, SEEK_SET);
+	return !(orig_pos + pos >= (end_file - 1));
+}
+
+struct ar_hdr * get_header(int ar_desc, int pos)
+{
+	lseek(ar_desc, pos, SEEK_CUR);
+	struct ar_hdr *header = (struct ar_hdr *) malloc(sizeof(struct ar_hdr));
+	read(ar_desc, header, sizeof(struct ar_hdr));
+	return header;
+}
+
+void format_header(struct ar_hdr *header, char key)
+{
+	int i;
+	for(i = 0; header->ar_name[i] != '/'; i++) {
+		if(i == NAME_LIMIT)
+			break;
+	}
+	header->ar_name[i] = '\0';
+	if(key == 'v') {
+		header->ar_date[DATE_LIMIT] = '\0';
+		header->ar_uid[UID_LIMIT] = '\0';
+		header->ar_gid[GID_LIMIT] = '\0';
+		header->ar_mode[MODE_LIMIT] = '\0';
+		header->ar_size[SIZE_LIMIT] = '\0';
+		clean_string(header->ar_date);
+		clean_string(header->ar_uid);
+		clean_string(header->ar_gid);
+		clean_string(header->ar_mode);
+	}
+}
+
+void print_table(int ar_desc, char key)
+{
+	lseek(ar_desc, SARMAG, SEEK_SET); // Skip archive identifier
+	int pos = 0; // Set position to 0
+	struct ar_hdr *header;
+	while(is_header(ar_desc, pos)) {
+		header = get_header(ar_desc, pos);
+		format_header(header, key);
+		print_header(header, key);
+		pos = atoi(header->ar_size); // Adjusts position
+		pos += pos % 2;
+	}
+}
+
+void concise_table(char *afile) // fix entire
+{
+	int ar_desc = open(afile, O_RDONLY);
+	if(ar_desc == -1) {
+		printf("Exception: Cannot read %s\n", afile);
+		archive_error();
+	}
+	print_table(ar_desc, 't');
+	close(ar_desc);
+	exit(0);
+}
+
+void verbose_table(char *afile) // fix entire
+{
+	printf("Printing verbose table...\n");
+	exit(0);
 }
 
 int create_archive(char *afile) // fix entire
@@ -123,15 +215,6 @@ void delete(char *afile, char **files, int file_count) // fix entire
 	for(c = 0; c < file_count; c++)
 		printf("%s deleted from %s\n%d files deleted\n", files[c], afile, c + 1);
 	exit(0);
-}
-
-char ** get_files(int file_count, char **argv)
-{
-	char **files = (char **) malloc(sizeof(char *) * file_count);
-	int i;
-	for(i = 0; i < file_count; i++)
-		files[i] = argv[i + 3];
-	return files;
 }
 
 int main(int argc, char **argv)
