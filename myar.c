@@ -67,7 +67,7 @@ int is_archive(char *afile)
 {
 	int success = 1;
 	if(!is_file(&afile, 1)) {
-		printf("Exception: %s - archive invalid\n", afile);
+		printf("Exception: %s is an invalid archive\n", afile);
 		success = 0;
 	} else {
 		int file_desc = open(afile, O_RDONLY);
@@ -289,7 +289,7 @@ int create_ar(char *afile, int flags, int permissions)
 		printf("Exception: Cannot create archive: %s\n", afile);
 		archive_error();
 	}
-	printf("Creating archive: %s\n", afile);
+	printf("myar: creating %s\n", afile);
 	close_ar(ar_desc);
 	return ar_desc;
 }
@@ -357,7 +357,7 @@ void append_file(int ar_desc, char *file)
 	close_file(file_desc);
 }
 
-void append(char *afile, char **files, int file_count)
+void append(char *afile, char **files, int file_count, char *self)
 {
 	int ar_desc;
 	int flags = O_RDONLY | O_WRONLY | O_APPEND;
@@ -375,10 +375,16 @@ void append(char *afile, char **files, int file_count)
 	ar_desc = open_ar(afile, flags);
 	int i;
 	for(i = 0; i < file_count; i++) {
-		printf("#%d : %s <- %d\n", i, files[i], ar_desc);
-		append_file(ar_desc, files[i]);
+		if(!
+		   (!strcmp(files[i], afile) ||
+		    !strcmp(files[i], self)  ||
+		    !strcmp(files[i], "myar.c"))
+		   ) {
+			append_file(ar_desc, files[i]);
+		} else {
+			printf("Avoided malformat : Did not append %s\n", files[i]);
+		}
 	}
-	printf("Files succesfully appended\n\n");
 	exit(0);
 }
 
@@ -393,7 +399,7 @@ void append_cd(char *afile, char *self) // fix entire
 		if(!
 		   (!strcmp(dir_entry->d_name, afile)    || // Skip archive
 		    !strcmp(dir_entry->d_name, self)     || // Skip program
-		    !strcmp(dir_entry->d_name, "myar.c") || // Skip source code
+		    !strcmp(dir_entry->d_name, "myar.c") || // Skip source file
 		    !S_ISREG(buffer.st_mode)             || // Skip non-regular
 		    ((strcmp(dir_entry->d_name, ".nfs") > 0) && // Skip temporary
 		     (strcmp(dir_entry->d_name, ".nft") < 0)) // .nfs files which
@@ -424,7 +430,7 @@ void append_cd(char *afile, char *self) // fix entire
 	}
 	if(file_count == 0)
 		file_error();
-	append(afile, files, file_count);
+		append(afile, files, file_count, self);
 }
 
 void extract(char *afile, char **files, int file_count) // fix entire
@@ -476,7 +482,7 @@ int main(int argc, char **argv)
 		if(key[1] == 'q') // If key is 'q'
 			if(!is_file(files, file_count)) // DELETE ME ??
 				file_error(); // DELETE ME ??
-			append(afile, files, file_count);
+		append(afile, files, file_count, argv[0]);
 		if(!is_archive(afile)) // Verifies archive exists
 			archive_error();
 		if(key[1] == 'x') // If key is 'x'
