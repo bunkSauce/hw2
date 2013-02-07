@@ -6,13 +6,22 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <time.h>
+#include <utime.h>
+#include <assert.h>
+#include <dirent.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/types.h>
+#include <utime.h>
+
 #define NAME_LIMIT 16
-#define DATE_LIMIT 11
-#define UID_LIMIT 5
-#define GID_LIMIT 5
-#define MODE_LIMIT 7
-#define SIZE_LIMIT 9
-#define ARFMAG_LIMIT 1
+#define DATE_LIMIT 12
+#define UID_LIMIT 6
+#define GID_LIMIT 6
+#define MODE_LIMIT 8
+#define SIZE_LIMIT 10
+#define ARFMAG_LIMIT 2
 
 void error(char *message)
 {
@@ -40,6 +49,16 @@ void program_error()
 	error("Program error encountered");
 }
 
+void read_error()
+{
+	error("Read error encountered");
+}
+
+void write_error()
+{
+	error("Write error encountered");
+}
+
 char ** get_files(int file_count, char **argv)
 {
 	char **files = (char **) malloc(sizeof(char *) * file_count);
@@ -53,7 +72,7 @@ int is_archive(char *afile)
 {
 	int success = 1;
 	if(!is_file(&afile, 1)) {
-		printf("Exception: Archive file does not exist\n");
+		printf("Exception: %s - archive invalid\n", afile);
 		success = 0;
 	} else {
 		int file_desc = open(afile, O_RDONLY);
@@ -81,12 +100,13 @@ int is_file(char **files, int file_count)
 	for(i = 0; i < file_count; i++) {
 		if(access(files[i], F_OK) == -1) {
 			success = 0;
-			printf("Exception: %s not found\n", files[i]);
-		}
-		stat(files[i], &buffer);
-		if(!S_ISREG(buffer.st_mode)) {
-			success = 0;
-			printf("Exception: %s is not a regular file\n", files[i]);
+			printf("Exception: %s - file not found\n", files[i]);
+		} else {
+			stat(files[i], &buffer);
+			if(!S_ISREG(buffer.st_mode)) {
+				success = 0;
+				printf("Exception: %s is not a regular file\n", files[i]);
+			}
 		}
 	}
 	return success;
@@ -187,11 +207,11 @@ void format_header(struct ar_hdr *header, char key)
 	}
 	header->ar_name[i] = '\0';
 	if(key == 'v') {
-		header->ar_date[DATE_LIMIT] = '\0';
-		header->ar_uid[UID_LIMIT] = '\0';
-		header->ar_gid[GID_LIMIT] = '\0';
-		header->ar_mode[MODE_LIMIT] = '\0';
-		header->ar_size[SIZE_LIMIT] = '\0';
+		header->ar_date[DATE_LIMIT - 1] = '\0';
+		header->ar_uid[UID_LIMIT - 1] = '\0';
+		header->ar_gid[GID_LIMIT - 1] = '\0';
+		header->ar_mode[MODE_LIMIT - 1] = '\0';
+		header->ar_size[SIZE_LIMIT - 1] = '\0';
 		clean_string(header->ar_date);
 		clean_string(header->ar_uid);
 		clean_string(header->ar_gid);
@@ -213,9 +233,9 @@ void print_table(int ar_desc, char key)
 	}
 }
 
-int open_ar(char *afile)
+int open_ar(char *afile, int flags)
 {
-	int ar_desc = open(afile, O_RDONLY);
+	int ar_desc = open(afile, flags);
 	if(ar_desc == -1) {
 		printf("Exception: Cannot read archive: %s\n", afile);
 		archive_error();
@@ -251,7 +271,7 @@ void close_file(int file_desc)
 
 void concise_table(char *afile)
 {
-	int ar_desc = open_ar(afile);
+	int ar_desc = open_ar(afile, O_RDONLY);
 	print_table(ar_desc, 't');
 	close_ar(ar_desc);
 	exit(0);
@@ -259,20 +279,23 @@ void concise_table(char *afile)
 
 void verbose_table(char *afile)
 {
-	int ar_desc = open_ar(afile);
+	int ar_desc = open_ar(afile, O_RDONLY);
 	print_table(ar_desc, 'v');
 	close_ar(ar_desc);
 	exit(0);
 }
 
-void init_ar(int ar_desc)
+void init_ar(char *afile, int flags)
 {
+	int ar_desc = open_ar(afile, flags);
 	if(lseek(ar_desc, 0, SEEK_SET) == lseek(ar_desc, 0, SEEK_END)) {
 		write(ar_desc, ARMAG, SARMAG);
 	} else {
 		printf("Unable to initialize archive - improper format\n");
+		close_ar(ar_desc);
 		archive_error();
 	}
+	close_ar(ar_desc);
 }
 
 int create_ar(char *afile, int flags, int permissions)
@@ -283,6 +306,7 @@ int create_ar(char *afile, int flags, int permissions)
 		archive_error();
 	}
 	printf("Creating archive: %s\n", afile);
+	close_ar(ar_desc);
 	return ar_desc;
 }
 
@@ -294,7 +318,7 @@ struct ar_hdr * init_header(int file_desc, char *file) // NOT WORKING
 	char header_name[16];
 	strcpy(header_name, file);
 	strcat(header_name, "/");
-	snprintf(header->ar_name, 60, "%-16s%-121d%-61d%-61d%-81o%-1011d",
+	snprintf(header->ar_name, 60, "%-16s%-12ld%-6ld%-6ld%-8lo%-10lld",
 		 header_name, buffer.st_mtime, (long) buffer.st_uid,
 		 (long) buffer.st_gid, (unsigned long) buffer.st_mode,
 		 (long long) buffer.st_size);
@@ -306,12 +330,12 @@ struct ar_hdr * init_header(int file_desc, char *file) // NOT WORKING
 void write_header(int ar_desc, struct ar_hdr *header) // NOT WORKING
 {
 	write(ar_desc, header->ar_name, NAME_LIMIT);
-	write(ar_desc, header->ar_date, DATE_LIMIT + 1);
-	write(ar_desc, header->ar_uid, UID_LIMIT + 1);
-	write(ar_desc, header->ar_gid, GID_LIMIT + 1);
-	write(ar_desc, header->ar_mode, MODE_LIMIT + 1);
-	write(ar_desc, header->ar_size, SIZE_LIMIT + 1);
-	write(ar_desc, header->ar_fmag, ARFMAG_LIMIT + 1);
+	write(ar_desc, header->ar_date, DATE_LIMIT);
+	write(ar_desc, header->ar_uid, UID_LIMIT);
+	write(ar_desc, header->ar_gid, GID_LIMIT);
+	write(ar_desc, header->ar_mode, MODE_LIMIT);
+	write(ar_desc, header->ar_size, SIZE_LIMIT);
+	write(ar_desc, header->ar_fmag, ARFMAG_LIMIT);
 }
 
 off_t get_size(int file_desc) // NOT WORKING
@@ -323,16 +347,18 @@ off_t get_size(int file_desc) // NOT WORKING
 	return size;
 }
 
-void append_content(int ar_desc, int file_desc, int size) // NOT WORKING LIKELY CAUSE
+void read_write(int w_desc, int r_desc, int size) // NOT WORKING LIKELY CAUSE
 {
 	char buffer[1];
-	off_t appended = 0;
-	int char_written = 0;
-	while(appended < size) {
-		read(file_desc, buffer, 1);
-		char_written = write(ar_desc, buffer, 1);
-		appended += char_written;
-		lseek(file_desc, 0, SEEK_CUR);
+	off_t total = 0;
+	int wrote = 0;
+	while(total < size) {
+		if(read(r_desc, buffer, 1) < 0)
+			read_error();
+		if((wrote = write(w_desc, buffer, 1)) < 0)
+			write_error();
+		total += wrote;
+		lseek(r_desc, 0, SEEK_CUR);
 	}
 }
 
@@ -341,29 +367,30 @@ void append_file(int ar_desc, char *file) // NOT WORKING
 	int file_desc = open_file(file);
 	struct ar_hdr *header = init_header(file_desc, file);
 	write_header(ar_desc, header);
-	append_content(ar_desc, file_desc, get_size(file_desc));
+	read_write(ar_desc, file_desc, get_size(file_desc));
 	close_file(file_desc);
 }
 
 void append(char *afile, char **files, int file_count) // NOT WORKING
 {
 	int ar_desc;
+	int flags = O_RDONLY | O_WRONLY | O_APPEND;
 	if(!is_archive(afile)) {
-		if(is_file(&afile, 1)) {
+		if(access(afile, F_OK) != -1) {
 		   printf("Exception: Archive invalid - cannot append\n");
 		   archive_error();
 		} else {
-			int flags = O_CREAT | O_WRONLY | O_APPEND;
+			flags = O_CREAT | O_WRONLY | O_APPEND;
 			ar_desc = create_ar(afile, flags, 0666);
-			init_ar(ar_desc);
+			flags = O_RDONLY | O_WRONLY | O_APPEND;
+			init_ar(afile, flags);
 		}
-	} else {
-		ar_desc = open_ar(afile);
 	}
+	ar_desc = open_ar(afile, flags);
 	int i;
 	for(i = 0; i < file_count; i++)
 		append_file(ar_desc, files[i]);
-	close_ar(ar_desc);
+	printf("Files succesfully appended\n\n");
 	exit(0);
 }
 
