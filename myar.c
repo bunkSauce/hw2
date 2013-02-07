@@ -5,15 +5,9 @@
 #include <ar.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-
-#include <time.h>
-#include <utime.h>
-#include <assert.h>
 #include <dirent.h>
-#include <errno.h>
 #include <time.h>
 #include <sys/types.h>
-#include <utime.h>
 
 #define NAME_LIMIT 16
 #define DATE_LIMIT 12
@@ -110,15 +104,6 @@ int is_file(char **files, int file_count)
 		}
 	}
 	return success;
-}
-
-char ** fetch_files_cd(int *file_count) // fix entire
-{
-	char **files = (char **) malloc(sizeof(char *) * 1);
-	printf("Fetching files in cd...\n");
-	files[0] = "All regular files in current directory appended\n";
-	*file_count = 1;
-	return files;
 }
 
 void clean_string(char *string)
@@ -310,7 +295,7 @@ int create_ar(char *afile, int flags, int permissions)
 	return ar_desc;
 }
 
-struct ar_hdr * init_header(int file_desc, char *file) // NOT WORKING
+struct ar_hdr * init_header(int file_desc, char *file)
 {
 	struct stat buffer;
 	fstat(file_desc, &buffer);
@@ -327,7 +312,7 @@ struct ar_hdr * init_header(int file_desc, char *file) // NOT WORKING
 	return header;
 }
 
-void write_header(int ar_desc, struct ar_hdr *header) // NOT WORKING
+void write_header(int ar_desc, struct ar_hdr *header)
 {
 	write(ar_desc, header->ar_name, NAME_LIMIT);
 	write(ar_desc, header->ar_date, DATE_LIMIT);
@@ -338,7 +323,7 @@ void write_header(int ar_desc, struct ar_hdr *header) // NOT WORKING
 	write(ar_desc, header->ar_fmag, ARFMAG_LIMIT);
 }
 
-off_t get_size(int file_desc) // NOT WORKING
+off_t get_size(int file_desc)
 {
 	off_t size;
 	int pos = lseek(file_desc, 0L, SEEK_CUR);
@@ -347,7 +332,7 @@ off_t get_size(int file_desc) // NOT WORKING
 	return size;
 }
 
-void read_write(int w_desc, int r_desc, int size) // NOT WORKING LIKELY CAUSE
+void read_write(int w_desc, int r_desc, int size)
 {
 	char buffer[1];
 	off_t total = 0;
@@ -360,9 +345,11 @@ void read_write(int w_desc, int r_desc, int size) // NOT WORKING LIKELY CAUSE
 		total += wrote;
 		lseek(r_desc, 0, SEEK_CUR);
 	}
+	buffer[0] = '\n';
+	write(w_desc, buffer, 1);
 }
 
-void append_file(int ar_desc, char *file) // NOT WORKING
+void append_file(int ar_desc, char *file)
 {
 	int file_desc = open_file(file);
 	struct ar_hdr *header = init_header(file_desc, file);
@@ -371,18 +358,16 @@ void append_file(int ar_desc, char *file) // NOT WORKING
 	close_file(file_desc);
 }
 
-void append(char *afile, char **files, int file_count) // NOT WORKING
+void append(char *afile, char **files, int file_count)
 {
 	int ar_desc;
-	int flags = O_RDONLY | O_WRONLY | O_APPEND;
+	int flags = O_CREAT | O_WRONLY | O_APPEND;
 	if(!is_archive(afile)) {
 		if(access(afile, F_OK) != -1) {
 		   printf("Exception: Archive invalid - cannot append\n");
 		   archive_error();
 		} else {
-			flags = O_CREAT | O_WRONLY | O_APPEND;
 			ar_desc = create_ar(afile, flags, 0666);
-			flags = O_RDONLY | O_WRONLY | O_APPEND;
 			init_ar(afile, flags);
 		}
 	}
@@ -392,6 +377,49 @@ void append(char *afile, char **files, int file_count) // NOT WORKING
 		append_file(ar_desc, files[i]);
 	printf("Files succesfully appended\n\n");
 	exit(0);
+}
+
+void append_cd(char *afile, char *self) // fix entire
+{
+	DIR *cwd = opendir(".");
+	int file_count = 0;
+	struct stat buffer;
+	struct dirent *dir_entry = readdir(cwd);
+	while(dir_entry != NULL) {
+		stat(dir_entry->d_name, &buffer);
+		if(!
+		   (!strcmp(dir_entry->d_name, afile) || // Skip archive
+		    !strcmp(dir_entry->d_name, self)  || // Skip program
+		    !S_ISREG(buffer.st_mode)          || // Skip non-regular
+		    ((strcmp(dir_entry->d_name, ".nfs") > 0) && // Skip temporary
+		     (strcmp(dir_entry->d_name, ".nft") < 0)) // .nfs files which
+		    )                                       // existed in my cwd
+		   )
+			file_count++;
+		dir_entry = readdir(cwd);
+	}
+	char **files = (char **) malloc(sizeof(char *) * file_count);
+	cwd = opendir(".");
+	dir_entry = readdir(cwd);
+	int i = 0;
+	while(dir_entry != NULL) {
+		stat(dir_entry->d_name, &buffer);
+		if(!
+		   (!strcmp(dir_entry->d_name, afile) ||
+		    !strcmp(dir_entry->d_name, self)  ||
+		    !S_ISREG(buffer.st_mode)          ||
+		    ((strcmp(dir_entry->d_name, ".nfs") > 0) &&
+		     (strcmp(dir_entry->d_name, ".nft") < 0))
+		    )
+		   ) {
+			files[i] = dir_entry->d_name;
+			i++;
+		}
+		dir_entry = readdir(cwd);
+	}
+	if(file_count == 0)
+		file_error();
+	append(afile, files, file_count);
 }
 
 void extract(char *afile, char **files, int file_count) // fix entire
@@ -433,11 +461,7 @@ int main(int argc, char **argv)
 			if(key[1] == 'v') // If key is 'v'
 				verbose_table(afile);
 		} else { // If key is 'A'
-			int file_count = 0;
-			char **files = fetch_files_cd(&file_count);
-			if (file_count == 0) // If file not found
-				file_error();
-			append(afile, files, file_count);
+			append_cd(afile, argv[0]);
 		}
 	} else { // If key is contained in "qxd"
 		if(argc < 4)
@@ -445,8 +469,8 @@ int main(int argc, char **argv)
 		int file_count = argc - 3; // Number of files = argc - 3
 		char **files = get_files(file_count, argv);
 		if(key[1] == 'q') // If key is 'q'
-			if(!is_file(files, file_count)) // DELETE ME
-				file_error(); // DELETE ME
+			if(!is_file(files, file_count)) // DELETE ME ??
+				file_error(); // DELETE ME ??
 			append(afile, files, file_count);
 		if(!is_archive(afile)) // Verifies archive exists
 			archive_error();
