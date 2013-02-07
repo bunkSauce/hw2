@@ -5,6 +5,7 @@
 #include <ar.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+
 #include <dirent.h>
 #include <time.h>
 #include <sys/types.h>
@@ -277,10 +278,8 @@ void init_ar(char *afile, int flags)
 		write(ar_desc, ARMAG, SARMAG);
 	} else {
 		printf("Unable to initialize archive - improper format\n");
-		close_ar(ar_desc);
 		archive_error();
 	}
-	close_ar(ar_desc);
 }
 
 int create_ar(char *afile, int flags, int permissions)
@@ -361,20 +360,24 @@ void append_file(int ar_desc, char *file)
 void append(char *afile, char **files, int file_count)
 {
 	int ar_desc;
-	int flags = O_CREAT | O_WRONLY | O_APPEND;
+	int flags = O_RDONLY | O_WRONLY | O_APPEND;
 	if(!is_archive(afile)) {
 		if(access(afile, F_OK) != -1) {
 		   printf("Exception: Archive invalid - cannot append\n");
 		   archive_error();
 		} else {
+			flags = O_CREAT | O_RDONLY | O_WRONLY | O_APPEND;
 			ar_desc = create_ar(afile, flags, 0666);
+			flags = O_RDONLY | O_WRONLY | O_APPEND;
 			init_ar(afile, flags);
 		}
 	}
 	ar_desc = open_ar(afile, flags);
 	int i;
-	for(i = 0; i < file_count; i++)
+	for(i = 0; i < file_count; i++) {
+		printf("#%d : %s <- %d\n", i, files[i], ar_desc);
 		append_file(ar_desc, files[i]);
+	}
 	printf("Files succesfully appended\n\n");
 	exit(0);
 }
@@ -388,9 +391,10 @@ void append_cd(char *afile, char *self) // fix entire
 	while(dir_entry != NULL) {
 		stat(dir_entry->d_name, &buffer);
 		if(!
-		   (!strcmp(dir_entry->d_name, afile) || // Skip archive
-		    !strcmp(dir_entry->d_name, self)  || // Skip program
-		    !S_ISREG(buffer.st_mode)          || // Skip non-regular
+		   (!strcmp(dir_entry->d_name, afile)    || // Skip archive
+		    !strcmp(dir_entry->d_name, self)     || // Skip program
+		    !strcmp(dir_entry->d_name, "myar.c") || // Skip source code
+		    !S_ISREG(buffer.st_mode)             || // Skip non-regular
 		    ((strcmp(dir_entry->d_name, ".nfs") > 0) && // Skip temporary
 		     (strcmp(dir_entry->d_name, ".nft") < 0)) // .nfs files which
 		    )                                       // existed in my cwd
@@ -405,9 +409,10 @@ void append_cd(char *afile, char *self) // fix entire
 	while(dir_entry != NULL) {
 		stat(dir_entry->d_name, &buffer);
 		if(!
-		   (!strcmp(dir_entry->d_name, afile) ||
-		    !strcmp(dir_entry->d_name, self)  ||
-		    !S_ISREG(buffer.st_mode)          ||
+		   (!strcmp(dir_entry->d_name, afile)    ||
+		    !strcmp(dir_entry->d_name, self)     ||
+		    !strcmp(dir_entry->d_name, "myar.c") ||
+		    !S_ISREG(buffer.st_mode)             ||
 		    ((strcmp(dir_entry->d_name, ".nfs") > 0) &&
 		     (strcmp(dir_entry->d_name, ".nft") < 0))
 		    )
