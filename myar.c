@@ -5,10 +5,11 @@
 #include <ar.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-
 #include <dirent.h>
 #include <time.h>
 #include <sys/types.h>
+#include <utime.h>
+#include <search.h>
 
 #define NAME_LIMIT 16
 #define DATE_LIMIT 12
@@ -176,15 +177,7 @@ int is_header(int ar_desc, int pos)
 	return !(orig_pos + pos >= (end_file - 1));
 }
 
-struct ar_hdr * get_header(int ar_desc, int pos)
-{
-	lseek(ar_desc, pos, SEEK_CUR);
-	struct ar_hdr *header = (struct ar_hdr *) malloc(sizeof(struct ar_hdr));
-	read(ar_desc, header, sizeof(struct ar_hdr));
-	return header;
-}
-
-void format_header(struct ar_hdr *header, char key)
+void format_header(struct ar_hdr *header)
 {
 	int i;
 	for(i = 0; header->ar_name[i] != '/'; i++) {
@@ -192,17 +185,24 @@ void format_header(struct ar_hdr *header, char key)
 			break;
 	}
 	header->ar_name[i] = '\0';
-	if(key == 'v') {
-		header->ar_date[DATE_LIMIT - 1] = '\0';
-		header->ar_uid[UID_LIMIT - 1] = '\0';
-		header->ar_gid[GID_LIMIT - 1] = '\0';
-		header->ar_mode[MODE_LIMIT - 1] = '\0';
-		header->ar_size[SIZE_LIMIT - 1] = '\0';
-		clean_string(header->ar_date);
-		clean_string(header->ar_uid);
-		clean_string(header->ar_gid);
-		clean_string(header->ar_mode);
-	}
+	header->ar_date[DATE_LIMIT - 1] = '\0';
+	header->ar_uid[UID_LIMIT - 1] = '\0';
+	header->ar_gid[GID_LIMIT - 1] = '\0';
+	header->ar_mode[MODE_LIMIT - 1] = '\0';
+	header->ar_size[SIZE_LIMIT - 1] = '\0';
+	clean_string(header->ar_date);
+	clean_string(header->ar_uid);
+	clean_string(header->ar_gid);
+	clean_string(header->ar_mode);
+}
+
+struct ar_hdr * get_header(int ar_desc, int pos)
+{
+	lseek(ar_desc, pos, SEEK_CUR);
+	struct ar_hdr *header = (struct ar_hdr *) malloc(sizeof(struct ar_hdr));
+	read(ar_desc, header, sizeof(struct ar_hdr));
+	format_header(header);
+	return header;
 }
 
 void print_table(int ar_desc, char key)
@@ -212,7 +212,6 @@ void print_table(int ar_desc, char key)
 	struct ar_hdr *header;
 	while(is_header(ar_desc, pos)) {
 		header = get_header(ar_desc, pos);
-		format_header(header, key);
 		print_header(header, key);
 		pos = atoi(header->ar_size); // Adjusts position
 		pos += pos % 2;
@@ -344,8 +343,10 @@ void read_write(int w_desc, int r_desc, int size)
 		total += wrote;
 		lseek(r_desc, 0, SEEK_CUR);
 	}
-	buffer[0] = '\n';
-	write(w_desc, buffer, 1);
+	if(size % 2 == 1) {
+		buffer[0] = '\n';
+		write(w_desc, buffer, 1);
+	}
 }
 
 void append_file(int ar_desc, char *file)
@@ -433,37 +434,62 @@ void append_cd(char *afile, char *self) // fix entire
 		append(afile, files, file_count, self);
 }
 
-struct ar_hdr * parse_archive(int ar_desc, char **files)
+int compare(const void *file1, const void *file2)
 {
-	struct ar_hdr *header;
-	if(is_header(ar_desc, pos)) {
-		header = get_nextheader(ar_desc, pos);
-		if(!strcmp(header->ar_name, FILENAME))
-			return header;
-	}
-	return NULL;
+	char *a = (char *) file1;
+	char *b = (char *) file2;
+	return (!strcmp(a, b));
 }
 
-void extract(char *afile, char **files, int file_count) // fix entire
+void delete(int ar_desc, struct ar_hdr *header) //finish
+{
+
+}
+
+void extract(int ar_desc, struct ar_hdr *header) //finish -------------------
+{
+	int orig_pos = lseek(ar_desc, 0L, SEEK_CUR);
+	int flags = O_CREAT | O_WRONLY;
+	unsigned long mode = strtoul(header->ar_mode, NULL, 0);
+	int file_desc = open(header->ar_name, flags, mode);
+	read_write(file_desc, ar_desc, atoi(header->ar_size)); // problem here?
+	struct stat s_buf;
+	struct utimbuf u_buf;
+	if(stat(header->ar_name, &s_buf) == -1)
+		error("Conversion error encountered\n");
+	u_buf.actime = u_buf.modtime = (time_t) strtol(header->ar_date, NULL, 0);
+	if(utime(header->ar_name, &u_buf) == -1)
+		error("Conversion error encountered\n");
+	long uid = strtol(header->ar_uid, NULL, 0);
+	long gid = strtol(header->ar_gid, NULL, 0);
+	chown(header->ar_name, uid, gid);
+	chmod(header->ar_name, strtoul(header->ar_mode, NULL, 8));
+	close(file_desc);
+	lseek(ar_desc, orig_pos, SEEK_SET);
+}
+
+void parse_archive(char *afile, char **files, int file_count,
+		   void (manipulate_file) (int, struct ar_hdr *)) // fix entire
 {
 	int i;
 	struct ar_hdr *header;
 	int ar_desc = open_ar(afile, O_RDONLY);
+	lseek(ar_desc, SARMAG, SEEK_SET);
 	int pos = 0;
-	for(i = 0; i < file_count; i++) {
-		header = parse_archive(ar_desc, pos, files);
-		//read_write()?
+	while(is_header(ar_desc, pos)) {
+		header = get_header(ar_desc, pos);
+		//int *file = lfind(header->ar_name, files,
+		//		  &(size_t) file_count, sizeof(char *),
+		//		  (int(*) (const void *, const void *)) compare);
+		for(i = 0; i < file_count; i++)
+			if(compare(files[i], header->ar_name)) {
+				manipulate_file(ar_desc, header);
+				files[i] = "";
+			}
+		pos = atoi(header->ar_size);
+		pos += pos % 2;
 	}
-
 	close_ar(ar_desc);
-	exit(0);
-}
-
-void delete(char *afile, char **files, int file_count) // fix entire
-{
-	int c;
-	for(c = 0; c < file_count; c++)
-		printf("%s deleted from %s\n%d files deleted\n", files[c], afile, c + 1);
 	exit(0);
 }
 
@@ -497,16 +523,17 @@ int main(int argc, char **argv)
 			user_error();
 		int file_count = argc - 3; // Number of files = argc - 3
 		char **files = get_files(file_count, argv);
-		if(key[1] == 'q') // If key is 'q'
+		if(key[1] == 'q') { // If key is 'q'
 			if(!is_file(files, file_count))
 				file_error();
-		append(afile, files, file_count, argv[0]);
+			append(afile, files, file_count, argv[0]);
+		}
 		if(!is_archive(afile)) // Verifies archive exists
 			archive_error();
 		if(key[1] == 'x') // If key is 'x'
-			extract(afile, files, file_count);
+			parse_archive(afile, files, file_count, &extract);
 		if(key[1] == 'd') // If key is 'd'
-			delete(afile, files, file_count);
+			parse_archive(afile, files, file_count, &delete);
 	}
 	program_error();
 	return 0;
