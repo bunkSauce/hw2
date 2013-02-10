@@ -433,11 +433,29 @@ void append_cd(char *afile, char *self) // fix entire
 		append(afile, files, file_count, self);
 }
 
+struct ar_hdr * parse_archive(int ar_desc, char **files)
+{
+	struct ar_hdr *header;
+	if(is_header(ar_desc, pos)) {
+		header = get_nextheader(ar_desc, pos);
+		if(!strcmp(header->ar_name, FILENAME))
+			return header;
+	}
+	return NULL;
+}
+
 void extract(char *afile, char **files, int file_count) // fix entire
 {
-	int c;
-	for(c = 0; c < file_count; c++)
-		printf("%s extracted from %s\n%d files extracted\n", files[c], afile, c + 1);
+	int i;
+	struct ar_hdr *header;
+	int ar_desc = open_ar(afile, O_RDONLY);
+	int pos = 0;
+	for(i = 0; i < file_count; i++) {
+		header = parse_archive(ar_desc, pos, files);
+		//read_write()?
+	}
+
+	close_ar(ar_desc);
 	exit(0);
 }
 
@@ -480,8 +498,8 @@ int main(int argc, char **argv)
 		int file_count = argc - 3; // Number of files = argc - 3
 		char **files = get_files(file_count, argv);
 		if(key[1] == 'q') // If key is 'q'
-			if(!is_file(files, file_count)) // DELETE ME ??
-				file_error(); // DELETE ME ??
+			if(!is_file(files, file_count))
+				file_error();
 		append(afile, files, file_count, argv[0]);
 		if(!is_archive(afile)) // Verifies archive exists
 			archive_error();
